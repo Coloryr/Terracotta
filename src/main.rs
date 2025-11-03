@@ -443,7 +443,7 @@ async fn main_single(state: Option<Lock>, mode: Mode) {
                     let _ = open::that(format!("http://127.0.0.1:{}/", port));
                 }
                 Mode::NoWeb => {
-
+                    logging!("Port", "{}", port);
                 }
                 Mode::HMCL { file } => output_port(port, file),
             }
@@ -477,7 +477,7 @@ async fn main_secondary(port: u16, mode: Mode) {
             }
         }
         Mode::NoWeb => {
-
+            logging!("Port", "{}", port);
         }
         #[cfg(target_os = "macos")]
         Mode::Daemon => assert!(false),
