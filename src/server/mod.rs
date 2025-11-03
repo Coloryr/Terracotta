@@ -33,7 +33,7 @@ fn download_log(fetch: Option<bool>) -> Result<std::fs::File, Status> {
 }
 
 #[get("/start?<port>&<player>")]
-fn start_host(port: Option<u16>, player: Option<String>) {
+fn start_host(port: Option<u16>, player: Option<String>) -> Status {
     if controller::start_host(port, player) {
         Status::Ok
     }
