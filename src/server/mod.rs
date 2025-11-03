@@ -32,6 +32,16 @@ fn download_log(fetch: Option<bool>) -> Result<std::fs::File, Status> {
     }
 }
 
+#[get("/start?<port>&<player>")]
+fn start_host(port: Option<u16>, player: Option<String>) {
+    if controller::start_host(port, player) {
+        Status::Ok
+    }
+    else {
+        Status::BadRequest
+    }
+}
+
 #[get("/panic?<peaceful>")]
 fn panic(peaceful: Option<bool>) {
     if peaceful.unwrap_or(false) {
@@ -82,7 +92,7 @@ pub async fn server_main(port_callback: mpsc::Sender<u16>) {
     let rocket = statics::configure(rocket);
 
     rocket
-        .mount("/", routes![download_log, get_meta, panic, devtools])
+        .mount("/", routes![download_log, get_meta, panic, devtools, start_host])
         .attach(rocket::fairing::AdHoc::on_liftoff(
             "Invoke Port Callback",
             move |rocket| {

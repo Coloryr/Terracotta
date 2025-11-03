@@ -139,3 +139,16 @@ profiles的数据结构为
 - kind: ProfileKind 账户类型
 
 ProfileKind有`HOST`, `LOCAL`, `GUEST`
+
+## 根据端口直接启动(非原版)
+
+```
+GET /start?<port>&<player>
+```
+
+- port:u16 端口
+- player:string 玩家
+
+无返回内容，用状态码返回是请求成功  
+- 200: 成功
+- 400: 错误

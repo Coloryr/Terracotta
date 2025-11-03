@@ -79,9 +79,9 @@ pub fn set_waiting() {
     state.set(AppState::Waiting);
 }
 
-pub fn start_host(port: Option<u16>, player: Option<String>) -> Value {
+pub fn start_host(port: Option<u16>, player: Option<String>) -> bool {
     if port.is_none() {
-        json!({"state": "port_error"})
+        false
     } else {
         let port_num: u16 = port.unwrap();
         let room = Room::create();
@@ -89,7 +89,7 @@ pub fn start_host(port: Option<u16>, player: Option<String>) -> Value {
         let capture = {
             let state = AppState::acquire();
             if !matches!(state.as_ref(), AppState::Waiting { .. }) {
-                return json!({"state": "state_error"});
+                return false;
             }
 
             state.set(AppState::HostStarting {
@@ -104,7 +104,7 @@ pub fn start_host(port: Option<u16>, player: Option<String>) -> Value {
             room_clone.start_host(port_num, player, capture);
         });
 
-        json!({"state": "host-starting"})
+        true
     }
 }
 
