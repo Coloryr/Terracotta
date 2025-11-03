@@ -1,6 +1,8 @@
 use std::{path::PathBuf, sync::{Arc, RwLock}, thread, time::Duration};
-
+use rocket::serde::json::Json;
 use rocket::http::Status;
+use serde_json::Value;
+use crate::controller;
 
 static WEB_STATIC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/webstatics.7z"));
 
@@ -39,6 +41,11 @@ impl<'r> rocket::response::Responder<'r, 'static> for MemoryFile {
 
         Ok(response)
     }
+}
+
+#[get("/start?<port>&<player>")]
+fn start_host(port: Option<u16>, player: Option<String>) -> Json<Value> {
+    Json(controller::start_host(port, player))
 }
 
 #[get("/<path..>")]
@@ -127,5 +134,5 @@ fn static_files(path: PathBuf) -> Result<MemoryFile, Status> {
 }
 
 pub fn configure(rocket: rocket::Rocket<rocket::Build>) -> rocket::Rocket<rocket::Build> {
-    rocket.mount("/", routes![static_files])
+    rocket.mount("/", routes![static_files, start_host])
 }
