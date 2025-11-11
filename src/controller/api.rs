@@ -1,16 +1,16 @@
-use std::sync::mpsc;
-use crate::controller::states::AppState;
-use crate::controller::{experimental, ExceptionType, Room};
-use crate::scaffolding::profile::Profile;
 use crate::MOTD;
+use crate::controller::states::AppState;
+use crate::controller::{ExceptionType, Room, experimental};
+use crate::easytier::publics::fetch_public_nodes;
 use crate::mc::scanning::MinecraftScanner;
+use crate::scaffolding::profile::Profile;
 use rocket::serde::Serialize;
 use serde::Serializer;
 use serde::ser::SerializeSeq;
 use serde_json::{Value, json};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime};
-use crate::easytier::publics::fetch_public_nodes;
 
 pub fn get_state() -> Value {
     let state = AppState::acquire();
@@ -87,8 +87,11 @@ pub fn start_host(port: Option<u16>, player: Option<String>) -> bool {
     } else {
         let port_num: u16 = port.unwrap();
         let room = Room::create();
-        let room_clone = room.clone();
+        let room1 = room.clone();
         let (sender, receiver) = mpsc::channel();
+        
+        let room2 = Room::create();
+        let room3 = room2.clone();
         let capture = {
             let state = AppState::acquire();
             if !matches!(state.as_ref(), AppState::Waiting { .. }) {
@@ -96,15 +99,20 @@ pub fn start_host(port: Option<u16>, player: Option<String>) -> bool {
             }
 
             state.set(AppState::HostStarting {
-                room,
+                room: room2,
                 port: port_num,
             })
         };
 
+        thread::spawn(move || {
+            // EasyTier Uptime is undergoing DDOS attack, so it's crucial to perform a prefetch logic.
+            let _ = sender.send(fetch_public_nodes(&room1));
+        });
+
         logging!("Core", "Setting to state WAITING.");
 
         thread::spawn(move || {
-            experimental::start_host(room_clone, port_num, player, capture, receiver.recv().unwrap());
+            experimental::start_host(room3, port_num, player, capture, receiver.recv().unwrap());
         });
 
         true
