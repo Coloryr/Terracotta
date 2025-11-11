@@ -2,12 +2,13 @@ use std::sync::mpsc;
 use crate::controller::states::AppState;
 use crate::controller::{experimental, ExceptionType, Room};
 use crate::scaffolding::profile::Profile;
-use crate::mc::scanning::MinecraftScanner;
 use crate::MOTD;
+use crate::mc::scanning::MinecraftScanner;
+use crate::scaffolding::profile::Profile;
 use rocket::serde::Serialize;
-use serde::ser::SerializeSeq;
 use serde::Serializer;
-use serde_json::{json, Value};
+use serde::ser::SerializeSeq;
+use serde_json::{Value, json};
 use std::thread;
 use std::time::{Duration, SystemTime};
 use crate::easytier::publics::fetch_public_nodes;
@@ -51,7 +52,9 @@ pub fn get_state() -> Value {
         AppState::GuestStarting { room, .. } => {
             json!({"state": "guest-starting", "index": index, "room": room.code})
         }
-        AppState::GuestOk { server, profiles, .. } => {
+        AppState::GuestOk {
+            server, profiles, ..
+        } => {
             json!({"state": "guest-ok", "index": index, "url": format!("127.0.0.1:{}", server.port), "profile_index": sharing_index, "profiles": profiles})
         }
         AppState::Exception { kind, .. } => json!({
@@ -77,6 +80,35 @@ pub fn set_waiting() {
         return;
     }
     state.set(AppState::Waiting);
+}
+
+pub fn start_host(port: Option<u16>, player: Option<String>) -> bool {
+    if port.is_none() {
+        false
+    } else {
+        let port_num: u16 = port.unwrap();
+        let room = Room::create();
+        let room_clone = room.clone();
+        let capture = {
+            let state = AppState::acquire();
+            if !matches!(state.as_ref(), AppState::Waiting { .. }) {
+                return false;
+            }
+
+            state.set(AppState::HostStarting {
+                room,
+                port: port_num,
+            })
+        };
+
+        logging!("Core", "Setting to state WAITING.");
+
+        thread::spawn(move || {
+            room_clone.start_host(port_num, player, capture);
+        });
+
+        true
+    }
 }
 
 pub fn set_scanning(player: Option<String>) {
@@ -113,7 +145,12 @@ pub fn set_scanning(player: Option<String>) {
             };
 
             if let Some(port) = scanner.get_ports().first() {
-                break (room.clone(), *port, state.set(AppState::HostStarting { room, port: *port }));
+                let room = Room::create();
+                break (
+                    room.clone(),
+                    *port,
+                    state.set(AppState::HostStarting { room, port: *port }),
+                );
             }
         };
 

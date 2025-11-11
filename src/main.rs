@@ -129,6 +129,7 @@ lazy_static! {
 #[derive(Debug, PartialEq)]
 enum Mode {
     General,
+    NoWeb,
     #[cfg(target_os = "macos")]
     Daemon,
     HMCL {
@@ -227,10 +228,14 @@ async fn main() {
                 println!("Options:");
                 println!("  --help: Print this help message");
                 println!("  --hmcl: [HMCL] For HMCL only.");
+                println!("  --noweb: Don't show webview");
                 #[cfg(target_os = "windows")]
                 println!("  --hmcl2: [INTERNAL] For HMCL only.");
                 #[cfg(target_os = "macos")]
                 println!("  --daemon: [INTERNAL] Run in daemon mode.");
+            }
+            "--noweb" => {
+                main_general(Mode::NoWeb).await;
             }
             _ => main_panic(arguments),
         },
@@ -437,6 +442,9 @@ async fn main_single(state: Option<Lock>, mode: Mode) {
                 Mode::General => {
                     let _ = open::that(format!("http://127.0.0.1:{}/", port));
                 }
+                Mode::NoWeb => {
+                    logging!("Port", "{}", port);
+                }
                 Mode::HMCL { file } => output_port(port, file),
             }
         }
@@ -467,6 +475,9 @@ async fn main_secondary(port: u16, mode: Mode) {
                     let _ = open::that(format!("http://127.0.0.1:{}/", port));
                 }
             }
+        }
+        Mode::NoWeb => {
+            logging!("Port", "{}", port);
         }
         #[cfg(target_os = "macos")]
         Mode::Daemon => assert!(false),

@@ -1,5 +1,4 @@
 use std::{path::PathBuf, sync::{Arc, RwLock}, thread, time::Duration};
-
 use rocket::http::Status;
 
 static WEB_STATIC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/webstatics.7z"));
