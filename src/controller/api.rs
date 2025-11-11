@@ -88,6 +88,7 @@ pub fn start_host(port: Option<u16>, player: Option<String>) -> bool {
         let port_num: u16 = port.unwrap();
         let room = Room::create();
         let room_clone = room.clone();
+        let (sender, receiver) = mpsc::channel();
         let capture = {
             let state = AppState::acquire();
             if !matches!(state.as_ref(), AppState::Waiting { .. }) {
@@ -103,7 +104,7 @@ pub fn start_host(port: Option<u16>, player: Option<String>) -> bool {
         logging!("Core", "Setting to state WAITING.");
 
         thread::spawn(move || {
-            room_clone.start_host(port_num, player, capture);
+            experimental::start_host(room_clone, port_num, player, capture, receiver.recv().unwrap());
         });
 
         true
