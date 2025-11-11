@@ -4,7 +4,6 @@ use crate::controller::{experimental, ExceptionType, Room};
 use crate::scaffolding::profile::Profile;
 use crate::MOTD;
 use crate::mc::scanning::MinecraftScanner;
-use crate::scaffolding::profile::Profile;
 use rocket::serde::Serialize;
 use serde::Serializer;
 use serde::ser::SerializeSeq;
