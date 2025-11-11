@@ -38,7 +38,7 @@ impl Room {
     pub fn start_host(self, port: u16, player: Option<String>, capture: AppStateCapture) {
         experimental::start_host(self, port, player, capture);
     }
-
+    
     pub fn start_guest(self, capture: AppStateCapture, player: Option<String>) {
         match self.kind {
             RoomKind::Experimental { .. } => experimental::start_guest(self, player, capture),

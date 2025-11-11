@@ -2,10 +2,7 @@ name: Rust-Cargo Build
 
 on:
   push:
-    paths:
-      - '**'
-      - '!.github/**'
-      - '.github/workflows/build.yaml'
+  pull_request:
   workflow_dispatch:
     inputs:
       version:
@@ -19,6 +16,7 @@ env:
   CARGO_TERM_COLOR: always
   name: terracotta
   RUST_BACKTRACE: full
+  TERRACOTTA_U_S: ${{ secrets.TERRACOTTA_U_S }}
 
 defaults:
   run:
