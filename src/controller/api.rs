@@ -9,7 +9,6 @@ use rocket::serde::Serialize;
 use serde::Serializer;
 use serde::ser::SerializeSeq;
 use serde_json::{Value, json};
-use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
