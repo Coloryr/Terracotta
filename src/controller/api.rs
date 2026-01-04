@@ -1,9 +1,10 @@
-use crate::MOTD;
+use std::sync::mpsc;
 use crate::controller::states::AppState;
-use crate::controller::{ExceptionType, Room, experimental};
-use crate::easytier::publics::fetch_public_nodes;
-use crate::mc::scanning::MinecraftScanner;
+use crate::controller::{experimental, ConnectionDifficulty, ExceptionType, Room};
 use crate::scaffolding::profile::Profile;
+use crate::mc::scanning::MinecraftScanner;
+use crate::MOTD;
+use crate::easytier::publics::fetch_public_nodes;
 use rocket::serde::Serialize;
 use serde::Serializer;
 use serde::ser::SerializeSeq;
@@ -48,13 +49,23 @@ pub fn get_state() -> Value {
         AppState::GuestConnecting { room, .. } => {
             json!({"state": "guest-connecting", "index": index, "room": room.code})
         }
-        AppState::GuestStarting { room, .. } => {
-            json!({"state": "guest-starting", "index": index, "room": room.code})
+        AppState::GuestStarting { room, difficulty, .. } => {
+            json!({"state": "guest-starting", "index": index, "room": room.code, "difficulty": match difficulty {
+                ConnectionDifficulty::Unknown => "UNKNOWN",
+                ConnectionDifficulty::Easiest => "EASIEST",
+                ConnectionDifficulty::Simple => "SIMPLE",
+                ConnectionDifficulty::Medium => "MEDIUM",
+                ConnectionDifficulty::Tough => "TOUGH",
+            }})
         }
-        AppState::GuestOk {
-            server, profiles, ..
-        } => {
-            json!({"state": "guest-ok", "index": index, "url": format!("127.0.0.1:{}", server.port), "profile_index": sharing_index, "profiles": profiles})
+        AppState::GuestOk { server, profiles, .. } => {
+            let url = if server.port == 25565 {
+                "127.0.0.1".into()
+            } else {
+                format!("127.0.0.1:{}", server.port)
+            };
+
+            json!({"state": "guest-ok", "index": index, "url": url, "profile_index": sharing_index, "profiles": profiles})
         }
         AppState::Exception { kind, .. } => json!({
             "state": "exception",
@@ -119,10 +130,10 @@ pub fn start_host(port: Option<u16>, player: Option<String>) -> bool {
     }
 }
 
-pub fn set_scanning(player: Option<String>) {
+pub fn set_scanning(room: Option<String>, player: Option<String>) {
     let capture = {
         let state = AppState::acquire();
-        if !matches!(state.as_ref(), AppState::Waiting { .. }) {
+        if !matches!(state.as_ref(), AppState::Waiting) {
             return;
         }
 
@@ -133,7 +144,9 @@ pub fn set_scanning(player: Option<String>) {
     logging!("Core", "Setting to state SCANNING.");
 
     thread::spawn(move || {
-        let room = Room::create();
+        let room = room
+            .and_then(|room| Room::from(&room))
+            .unwrap_or_else(Room::create);
 
         let (sender, receiver) = mpsc::channel();
         let room2 = room.clone();

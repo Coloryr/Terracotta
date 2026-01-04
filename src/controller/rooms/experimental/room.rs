@@ -1,7 +1,7 @@
 use crate::controller::experimental::{MACHINE_ID, VENDOR};
 use crate::controller::rooms::legacy;
 use crate::controller::states::{AppState, AppStateCapture};
-use crate::controller::{ExceptionType, Room, RoomKind, SCAFFOLDING_PORT};
+use crate::controller::{ConnectionDifficulty, ExceptionType, Room, RoomKind, SCAFFOLDING_PORT};
 use crate::easytier;
 use crate::easytier::argument::{Argument, PortForward, Proto};
 use crate::easytier::publics::{fetch_public_nodes, PublicServers};
@@ -18,6 +18,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use std::thread;
+use crate::easytier::EasyTierMember;
 
 static CHARS: &[u8] = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ".as_bytes();
 
@@ -146,7 +147,7 @@ pub fn start_host(room: Room, port: u16, player: Option<String>, capture: AppSta
     args.push(Argument::TcpWhitelist(port));
     args.push(Argument::UdpWhitelist(port));
 
-    let easytier = easytier::FACTORY.create(args);
+    let easytier = easytier::create(args);
     let capture = {
         let Some(state) = capture.try_capture() else {
             return;
@@ -170,6 +171,8 @@ pub fn start_host(room: Room, port: u16, player: Option<String>, capture: AppSta
     thread::spawn(move || {
         let mut counter = 0;
         loop {
+            thread::sleep(Duration::from_secs(5));
+
             if legacy::check_mc_conn(port) {
                 counter = 0;
             } else {
@@ -217,13 +220,13 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
     args.push(Argument::DHCP);
     args.push(Argument::TcpWhitelist(0));
     args.push(Argument::UdpWhitelist(0));
-    let easytier = easytier::FACTORY.create(args);
+    let easytier = easytier::create(args);
     let capture = {
         let Some(state) = capture.try_capture() else {
             return;
         };
 
-        state.set(AppState::GuestStarting { room, easytier })
+        state.set(AppState::GuestStarting { room, easytier, difficulty: ConnectionDifficulty::Unknown })
     };
 
     let (scaffolding_port, host_ip) = 'local_port: {
@@ -234,7 +237,7 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
                 return;
             };
             let mut state = state.into_slow();
-            let AppState::GuestStarting { easytier, .. } = state.as_mut_ref() else {
+            let AppState::GuestStarting { easytier, difficulty, .. } = state.as_mut_ref() else {
                 unreachable!();
             };
             if !easytier.is_alive() {
@@ -245,25 +248,48 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
             let Some(players) = easytier.get_players() else {
                 continue;
             };
-            for (hostname, ip) in players {
-                if hostname.starts_with("scaffolding-mc-server-") && let Ok(port) = u16::from_str(&hostname["scaffolding-mc-server-".len()..]) {
-                    logging!("RoomExperiment", "Scaffolding Server is at {}:{}", ip, port);
 
-                    let local_port = PortRequest::Scaffolding.request();
-
-                    if !easytier.add_port_forward(&[PortForward {
-                        local: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, local_port).into(),
-                        remote: SocketAddrV4::new(ip, port).into(),
-                        proto: Proto::TCP,
-                    }]) {
-                        logging!("RoomExperiment", "Cannot create a port-forward {} -> {} for Scaffolding Connection.", local_port, port);
-                        state.set(AppState::Exception { kind: ExceptionType::GuestEasytierCrash });
-                        return;
-                    };
-
-                    break 'local_port (local_port, ip);
+            let Some(local_nat) = players.iter().find_map(|EasyTierMember { is_local, nat, ..}| {
+                if *is_local {
+                    Some(nat)
+                } else {
+                    None
                 }
-            }
+            }) else {
+                continue;
+            };
+
+            let Some((server_address, server_port, server_nat)) = players.iter().find_map(|
+                EasyTierMember { hostname, address, is_local, nat, .. }
+            | {
+                static PREFIX: &str = "scaffolding-mc-server-";
+
+                if let Some(address) = address && !is_local && hostname.starts_with(PREFIX) && let Ok(port) = u16::from_str(&hostname[PREFIX.len()..]) {
+                    Some((address, port, nat))
+                } else {
+                    None
+                }
+            }) else {
+                continue;
+            };
+
+            logging!("RoomExperiment", "Scaffolding Server is at {}:{}", server_address, server_port);
+            let local_port = PortRequest::Scaffolding.request();
+            if !easytier.add_port_forward(&[PortForward {
+                local: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, local_port).into(),
+                remote: SocketAddrV4::new(*server_address, server_port).into(),
+                proto: Proto::TCP,
+            }]) {
+                logging!("RoomExperiment", "Cannot create a port-forward {} -> {} for Scaffolding Connection.", local_port, server_port);
+                state.set(AppState::Exception { kind: ExceptionType::GuestEasytierCrash });
+                return;
+            };
+
+            *difficulty = easytier::calc_conn_difficulty(local_nat, server_nat);
+            logging!("RoomExperiment", "Current NAT status: {:?} -> {:?}, difficulty = {:?}", local_nat, server_nat, difficulty);
+            state.increase_shared();
+
+            break 'local_port (local_port, *server_address);
         }
 
         logging!("RoomExperiment", "Cannot find scaffolding server.");
@@ -282,8 +308,8 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
     }
 
     let mut session = 'session: {
-        for timeout in [4, 4, 8, 4, 8, 16] {
-            thread::sleep(Duration::from_secs(timeout));
+        for _ in 0..60 {
+            thread::sleep(Duration::from_secs(4));
 
             const FINGERPRINT: [u8; 16] = [0x41, 0x57, 0x48, 0x44, 0x86, 0x37, 0x40, 0x59, 0x57, 0x44, 0x92, 0x43, 0x96, 0x99, 0x85, 0x01];
             if let Ok(mut session) = ClientSession::open(IpAddr::V4(Ipv4Addr::LOCALHOST), scaffolding_port)
@@ -301,10 +327,10 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
                 }
             }
 
-            let Some(mut state) = capture.try_capture() else {
+            let Some(state) = capture.try_capture() else {
                 return;
             };
-            let AppState::GuestStarting { easytier, .. } = state.as_mut_ref() else {
+            let AppState::GuestStarting { easytier, .. } = state.as_ref() else {
                 unreachable!();
             };
             if !easytier.is_alive() {
@@ -346,7 +372,10 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
 
         // To maximum compatibility, try to request the identical port.
         // If failed, use a dynamic free port instead.
-        let local_port = PortRequest::request_specific(port).unwrap_or_else(|| PortRequest::Minecraft.request());
+        let local_port = PortRequest::request_specific(port).unwrap_or_else(|e| {
+            logging!("RoomExperiment", "Unable to request shadow port {} on client: {:?}. Mods requiring UDP socket like SimpleVoiceChat may go wrong.", port, e);
+            PortRequest::Minecraft.request()
+        });
 
         if !easytier.add_port_forward(&{
             let locals = [
@@ -386,7 +415,7 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
     }
     logging!("RoomExperiment", "MC connection is OK.");
 
-    let local = ProfileSnapshot {
+    let local_profile = ProfileSnapshot {
         machine_id: MACHINE_ID.to_string(),
         name: player.unwrap_or("Terracotta Anonymous Guest".to_string()),
         vendor: VENDOR.to_string(),
@@ -398,7 +427,7 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
             return;
         };
         state.replace(|state| {
-            let AppState::GuestStarting { room, easytier } = state else {
+            let AppState::GuestStarting { room, easytier, .. } = state else {
                 unreachable!();
             };
 
@@ -406,7 +435,7 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
                 room,
                 easytier,
                 server: FakeServer::create(local_port, crate::MOTD),
-                profiles: vec![local.clone()],
+                profiles: vec![local_profile.clone()],
             }
         })
     };
@@ -418,9 +447,9 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
             {
                 let Some(_) = session.send_sync(("c", "player_ping"), |body| {
                     serde_json::to_writer(body, &json!({
-                        "machine_id": local.get_machine_id(),
-                        "name": local.get_name(),
-                        "vendor": local.get_vendor()
+                        "machine_id": local_profile.get_machine_id(),
+                        "name": local_profile.get_name(),
+                        "vendor": local_profile.get_vendor()
                     })).unwrap();
                 }) else {
                     fail(capture);
@@ -429,7 +458,7 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
             }
 
             {
-                let Some(mut server_profiles) = session.send_sync(("c", "player_profiles_list"), |_| {}).map(|response| {
+                let Some(server_profiles) = session.send_sync(("c", "player_profiles_list"), |_| {}).map(|response| {
                     let PacketResponse::Ok { data } = response else {
                         unreachable!();
                     };
@@ -474,6 +503,9 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
                         logging!("RoomExperiment", "API c:player_profiles_list invocation failed: No host detected.");
                         return None;
                     }
+                    if !local {
+                        server_players.push(local_profile.clone());
+                    }
 
                     server_players.sort_by_cached_key(|profile| profile.get_machine_id().to_string());
                     for profile in server_players.windows(2) {
@@ -497,10 +529,6 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
                 if !easytier.is_alive() {
                     state.set(AppState::Exception { kind: ExceptionType::GuestEasytierCrash });
                     return;
-                }
-
-                if server_profiles.binary_search_by_key(&*MACHINE_ID, |profile| profile.get_machine_id()).is_err() {
-                    server_profiles.push(local.clone());
                 }
 
                 let mut used = vec![false; server_profiles.len()];
@@ -547,6 +575,8 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
                         },
                     }
                 }
+
+                let mut server_profiles = server_profiles;
                 for i in (0..server_profiles.len()).rev() {
                     let profile = server_profiles.pop().unwrap();
                     if !used[i] && *profile.get_kind() != ProfileKind::LOCAL {
@@ -563,7 +593,7 @@ pub fn start_guest(room: Room, player: Option<String>, capture: AppStateCapture)
 }
 
 fn compute_arguments(room: &Room, public_servers: PublicServers) -> Vec<Argument> {
-    static DEFAULT_ARGUMENTS: [Argument; 7] = [
+    static DEFAULT_ARGUMENTS: [Argument; 8] = [
         Argument::NoTun,
         Argument::Compression(Cow::Borrowed("zstd")),
         Argument::MultiThread,
@@ -577,6 +607,7 @@ fn compute_arguments(room: &Room, public_servers: PublicServers) -> Vec<Argument
             address: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into(),
             proto: Proto::TCP,
         },
+        Argument::P2POnly
     ];
 
     let mut args: Vec<Argument> = Vec::with_capacity(32);
